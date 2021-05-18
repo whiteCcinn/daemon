@@ -1,6 +1,14 @@
 # daemon
 Go daemon mode for the process
 
+## Features
+
+- supervisor
+- restart count
+- restart callback
+- custom logger
+- worked time
+
 ## Log
 
 ```log
