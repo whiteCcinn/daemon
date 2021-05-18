@@ -39,7 +39,6 @@ func WithNoExit() Option {
 
 const EnvName = "_DAEMON"
 
-//运行时调用background的次数
 var runIdx int = 0
 
 type Context struct {
