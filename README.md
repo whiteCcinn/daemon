@@ -1,6 +1,8 @@
 # daemon
 Go daemon mode for the process
 
+## Log
+
 ```log
 [process(pid=2719)] [started]
 [supervisor(2713)] [heart --pid=2719]
@@ -35,6 +37,8 @@ main.main()
 [supervisor(2924)] [count:2/2; errNum:0/0] [heart -pid=2936 exit] [2936-worked 10.0428623s] [err: exit status 2]
 [supervisor(2924)] [reboot too many times quit]
 ```
+
+## Terminal
 
 ```
 root@87ced9181ef6:/www/example# ps -ef
