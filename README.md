@@ -9,6 +9,11 @@ Go daemon mode for the process
 - custom logger
 - worked time
 
+[example](https://github.com/whiteCcinn/daemon/tree/main/example)
+
+- [backgroud](https://github.com/whiteCcinn/daemon/blob/main/example/backgroud.go)
+- [daemon](https://github.com/whiteCcinn/daemon/blob/main/example/daemon.go)
+
 ## Log
 
 ```log
