@@ -13,3 +13,8 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+example/backgroud
+example/daemon
+example/*.log
+go.sum
+.idea
