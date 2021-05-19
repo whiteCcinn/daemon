@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/erikdubbelboer/gspt"
 	"io"
@@ -47,7 +48,8 @@ type Context struct {
 
 	ProcAttr syscall.SysProcAttr
 
-	Logger io.Writer
+	Logger      io.Writer
+	PanicLogger io.Writer
 
 	Env  []string
 	Args []string
@@ -62,8 +64,9 @@ type Context struct {
 	RestoreTime time.Duration
 
 	*exec.Cmd
-	Pid  int // supervisor pid
-	CPid int // main pid
+	ExtraFiles []*os.File
+	Pid        int // supervisor pid
+	CPid       int // main pid
 
 	RestartCallback
 }
@@ -111,7 +114,7 @@ func Background(ctx context.Context, dctx *Context, opts ...Option) (*exec.Cmd, 
 		dctx.CPid = cmd.Process.Pid
 		if !defaultOption.exit {
 			dctx.log("[process(%d)] [started]\n", dctx.CPid)
-			dctx.log("[supervisor(%d)] [watch --pid=%d]\n", dctx.Pid, dctx.CPid)
+			dctx.log("[supervisor(%d)] [heart --pid=%d]\n", dctx.Pid, dctx.CPid)
 		}
 	}
 
@@ -134,6 +137,14 @@ func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 	if dctx.Logger != nil {
 		cmd.Stderr = dctx.Logger
 		cmd.Stdout = dctx.Logger
+	}
+
+	if dctx.PanicLogger == nil {
+		dctx.PanicLogger = dctx.Logger
+	}
+
+	if dctx.ExtraFiles != nil {
+		cmd.ExtraFiles = dctx.ExtraFiles
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -169,6 +180,28 @@ func (dctx *Context) Run(ctx context.Context) error {
 			os.Exit(0)
 		}
 		count++
+
+		r, w, err := os.Pipe()
+		if err != nil {
+			dctx.log("[supervisor(%d)] [create pipe failed] [err: %v]\n", dctx.Pid, err)
+			os.Exit(2)
+		}
+
+		// 因为不需要从父进程发送到子进程，所以不需要w2
+		r2, _, err := os.Pipe()
+		if err != nil {
+			dctx.log("[supervisor(%d)] [create pipe failed] [err: %v]\n", dctx.Pid, err)
+			os.Exit(2)
+		}
+
+		extraFile := make([]*os.File, 0, 2)
+		// so fd(3) = w
+		extraFile = append(extraFile, w, r2)
+		if dctx.ExtraFiles != nil {
+			extraFile = append(extraFile, dctx.ExtraFiles...)
+		}
+		dctx.ExtraFiles = extraFile
+
 		begin := time.Now()
 		cmd, err := Background(ctx, dctx, WithNoExit())
 		if err != nil {
@@ -179,14 +212,52 @@ func (dctx *Context) Run(ctx context.Context) error {
 
 		// child process
 		if cmd == nil {
+			exitFunc := func(sig os.Signal) (err error) {
+				// this is fd(3)
+				pipe := os.NewFile(uintptr(3), "pipe")
+				message := PipeMessage{
+					Type:     ProcessToSupervisor,
+					Behavior: WantSafetyClose,
+				}
+				err = json.NewEncoder(pipe).Encode(message)
+				if err != nil {
+					panic(err)
+				}
+				return
+			}
+			SetSigHandler(exitFunc, syscall.SIGINT)
+			SetSigHandler(exitFunc, syscall.SIGTERM)
+
 			break
 		}
+
+		// supervisor process
 		gspt.SetProcTitle(fmt.Sprintf("heart -pid %d", dctx.CPid))
 		if count > 2 || isReset {
 			if dctx.RestartCallback != nil {
 				dctx.RestartCallback(ctx)
 			}
 		}
+
+		// 从子进程获取数据
+		go func() {
+			for {
+				var data PipeMessage
+				decoder := json.NewDecoder(r)
+				if err := decoder.Decode(&data); err != nil {
+					log.Printf("decode r, err: %v", err)
+					break
+				}
+				if data.Type != ProcessToSupervisor {
+					continue
+				}
+
+				if data.Behavior == WantSafetyClose {
+					dctx.log("[supervisor(%d)] [stop heart -pid %d] [safety exit]\n", dctx.Pid, dctx.CPid)
+					os.Exit(0)
+				}
+			}
+		}()
 
 		// parent process wait child process exit
 		err = cmd.Wait()
@@ -209,16 +280,40 @@ func (dctx *Context) Run(ctx context.Context) error {
 			dctx.log("[supervisor(%d)] [%s] [heart -pid=%d exit] [%d-worked %v] [err: %v]\n", dctx.Pid, dInfo, dctx.CPid, dctx.CPid, cost, err)
 		} else {
 			dctx.log("[supervisor(%d)] [%s] [heart -pid=%d exit] [%d-worked %v]\n", dctx.Pid, dInfo, dctx.CPid, dctx.CPid, cost)
-
 		}
 	}
 
 	return nil
 }
 
+// output log-message to Context.Logger
 func (dctx *Context) log(format string, args ...interface{}) {
 	_, fe := fmt.Fprintf(dctx.Logger, format, args...)
 	if fe != nil {
 		log.Fatal(fe)
 	}
+}
+
+func (dctx *Context) logPanic(format string, args ...interface{}) {
+	_, fe := fmt.Fprintf(dctx.PanicLogger, format, args...)
+	if fe != nil {
+		log.Fatal(fe)
+	}
+}
+
+// WithRecovery wraps goroutine startup call with force recovery.
+// it will dump current goroutine stack into log if catch any recover result.
+//   exec:      execute logic function.
+//   recoverFn: handler will be called after recover and before dump stack, passing `nil` means noop.
+func (dctx *Context) WithRecovery(exec func(), recoverFn func(r interface{})) {
+	defer func() {
+		r := recover()
+		if recoverFn != nil {
+			recoverFn(r)
+		}
+		if r != nil {
+			dctx.logPanic("panic in the recoverable goroutine, error: %v\n", r)
+		}
+	}()
+	exec()
 }

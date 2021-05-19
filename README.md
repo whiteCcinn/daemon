@@ -8,11 +8,19 @@ Go daemon mode for the process
 - restart callback
 - custom logger
 - worked time
+- panic recover
 
-[example](https://github.com/whiteCcinn/daemon/tree/main/example)
+## Installation
 
+```shell
+go get github.com/whiteCcinn/daemon
+```
+
+## Examples：
 - [backgroud](https://github.com/whiteCcinn/daemon/blob/main/example/backgroud.go)
 - [daemon](https://github.com/whiteCcinn/daemon/blob/main/example/daemon.go)
+- [daemon-recover](https://github.com/whiteCcinn/daemon/blob/main/example/daemon_recover.go)
+- [daemon-signal](https://github.com/whiteCcinn/daemon/blob/main/example/daemon_signal.go)
 
 ## Log
 
@@ -49,6 +57,26 @@ main.main()
 	/www/example/daemon.go:38 +0x2c8
 [supervisor(2924)] [count:2/2; errNum:0/0] [heart -pid=2936 exit] [2936-worked 10.0428623s] [err: exit status 2]
 [supervisor(2924)] [reboot too many times quit]
+
+
+[process(1648)] [started]
+[supervisor(1642)] [heart --pid=1648]
+2021/05/19 07:46:12 1648 start...
+2021/05/19 07:46:22 1648 end
+[supervisor(1642)] [count:1/2; errNum:0/0] [heart -pid=1648 exit] [1648-worked 10.0249616s]
+[process(1661)] [started]
+[supervisor(1642)] [heart --pid=1661]
+2021/05/19 07:46:22 restart...
+2021/05/19 07:46:22 1661 start...
+2021/05/19 07:46:32 1661 end
+[supervisor(1642)] [count:2/2; errNum:0/0] [heart -pid=1661 exit] [1661-worked 10.0243316s]
+[supervisor(1642)] [reboot too many times quit]
+[process(1782)] [started]
+[supervisor(1775)] [heart --pid=1782]
+2021/05/19 07:50:59 1782 start...
+2021/05/19 07:51:05 sigterm
+[supervisor(1775)] [stop heart -pid 1782] [safety exit]
+2021/05/19 07:51:09 1782 end...
 ```
 
 ## Terminal
