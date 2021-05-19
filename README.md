@@ -1,5 +1,5 @@
 # daemon
-Go daemon mode for the process
+Go supervisor daemon module, similar to the Erlang | python's supervisor, assist you in better monitor your business processes 🚀
 
 ## Features
 
