@@ -68,11 +68,13 @@ type Context struct {
 	Pid        int // supervisor pid
 	CPid       int // main pid
 
+	// Restart after callback
 	RestartCallback
 }
 
 type RestartCallback func(ctx context.Context)
 
+// attachContext attach value to Context
 func attachContext(dctx *Context) (isChild bool) {
 	runIdx++
 	envIdx, err := strconv.Atoi(os.Getenv(EnvName))
@@ -95,8 +97,9 @@ func attachContext(dctx *Context) (isChild bool) {
 	return false
 }
 
+// Background Converts the current process to a background process
+// If `WithNoExit()` is called, it doesn't exit
 func Background(ctx context.Context, dctx *Context, opts ...Option) (*exec.Cmd, error) {
-
 	for _, o := range opts {
 		o.apply(defaultOption)
 	}
@@ -125,6 +128,7 @@ func Background(ctx context.Context, dctx *Context, opts ...Option) (*exec.Cmd, 
 	return cmd, nil
 }
 
+// startProc start am process
 func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 	cmd := &exec.Cmd{
 		Path:        dctx.Args[0],
@@ -159,6 +163,7 @@ func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// Run An supervisor daemon
 func (dctx *Context) Run(ctx context.Context) error {
 	_, err := Background(ctx, dctx)
 	if err != nil {
@@ -187,16 +192,17 @@ func (dctx *Context) Run(ctx context.Context) error {
 			os.Exit(2)
 		}
 
-		// 因为不需要从父进程发送到子进程，所以不需要w2
-		r2, _, err := os.Pipe()
-		if err != nil {
-			dctx.log("[supervisor(%d)] [create pipe failed] [err: %v]\n", dctx.Pid, err)
-			os.Exit(2)
-		}
+		// Because there is no need to send from the parent to the child, w2 is not required
+		// tips: It might be useful later
+		//r2, w2, err := os.Pipe()
+		//if err != nil {
+		//	dctx.log("[supervisor(%d)] [create pipe failed] [err: %v]\n", dctx.Pid, err)
+		//	os.Exit(2)
+		//}
 
 		extraFile := make([]*os.File, 0, 2)
 		// so fd(3) = w
-		extraFile = append(extraFile, w, r2)
+		extraFile = append(extraFile, w)
 		if dctx.ExtraFiles != nil {
 			extraFile = append(extraFile, dctx.ExtraFiles...)
 		}
@@ -239,7 +245,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 			}
 		}
 
-		// 从子进程获取数据
+		// read from child process
 		go func() {
 			for {
 				var data PipeMessage
@@ -294,6 +300,7 @@ func (dctx *Context) log(format string, args ...interface{}) {
 	}
 }
 
+// output log-message to Context.PanicLogger
 func (dctx *Context) logPanic(format string, args ...interface{}) {
 	_, fe := fmt.Fprintf(dctx.PanicLogger, format, args...)
 	if fe != nil {
