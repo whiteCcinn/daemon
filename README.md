@@ -9,6 +9,8 @@ Go supervisor daemon module, similar to the Erlang | python's supervisor, assist
 - custom logger
 - worked time
 - panic recover
+- named-pipe-ipc
+- no-named-pipe-ipc
 
 ## Installation
 
