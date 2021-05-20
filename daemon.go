@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/erikdubbelboer/gspt"
+	"github.com/whiteCcinn/named-pipe-ipc"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -65,11 +67,22 @@ type Context struct {
 
 	*exec.Cmd
 	ExtraFiles []*os.File
-	Pid        int // supervisor pid
-	CPid       int // main pid
+	// supervisor pid
+	Pid int
+	// main pid
+	CPid int
+	// start count
+	Count int
+	// start error number
+	ErrNum int
 
 	// Restart after callback
 	RestartCallback
+
+	namedPipeCtx *named_pipe_ipc.Context
+
+	noNamedPipeOnce sync.Once
+	namedPipeOnce   sync.Once
 }
 
 type RestartCallback func(ctx context.Context)
@@ -170,21 +183,20 @@ func (dctx *Context) Run(ctx context.Context) error {
 		log.Fatal(err)
 	}
 
-	count := 1
+	dctx.Count = 1
 	isReset := false
-	errNum := 0
+	dctx.ErrNum = 0
 	for {
 		//daemon information
-		dInfo := fmt.Sprintf("count:%d/%d; errNum:%d/%d", count, dctx.MaxCount, errNum, dctx.MaxError)
-		if errNum > dctx.MaxError {
+		if dctx.ErrNum > dctx.MaxError {
 			dctx.log("[supervisor(%d)] [child process fails too many times]\n", dctx.Pid)
 			os.Exit(1)
 		}
-		if dctx.MaxCount > 0 && count > dctx.MaxCount {
+		if dctx.MaxCount > 0 && dctx.Count > dctx.MaxCount {
 			dctx.log("[supervisor(%d)] [reboot too many times quit]\n", dctx.Pid)
 			os.Exit(0)
 		}
-		count++
+		dctx.Count++
 
 		r, w, err := os.Pipe()
 		if err != nil {
@@ -212,7 +224,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 		cmd, err := Background(ctx, dctx, WithNoExit())
 		if err != nil {
 			dctx.log("[supervisor(%d)] [child process start failed, err: %s]\n", dctx.Pid, err)
-			errNum++
+			dctx.ErrNum++
 			continue
 		}
 
@@ -239,31 +251,82 @@ func (dctx *Context) Run(ctx context.Context) error {
 
 		// supervisor process
 		gspt.SetProcTitle(fmt.Sprintf("heart -pid %d", dctx.CPid))
-		if count > 2 || isReset {
+		if dctx.Count > 2 || isReset {
 			if dctx.RestartCallback != nil {
 				dctx.RestartCallback(ctx)
 			}
 		}
 
 		// read from child process
-		go func() {
-			for {
-				var data PipeMessage
-				decoder := json.NewDecoder(r)
-				if err := decoder.Decode(&data); err != nil {
-					log.Printf("decode r, err: %v", err)
-					break
-				}
-				if data.Type != ProcessToSupervisor {
-					continue
-				}
+		dctx.noNamedPipeOnce.Do(func() {
+			dctx.log("[supervisor(%d)] [no-named-pipe-ipc] [listen]\n", dctx.Pid)
+			go func() {
+				for {
+					var data PipeMessage
+					decoder := json.NewDecoder(r)
+					if err := decoder.Decode(&data); err != nil {
+						log.Printf("decode r, err: %v", err)
+						break
+					}
+					if data.Type != ProcessToSupervisor {
+						continue
+					}
 
-				if data.Behavior == WantSafetyClose {
-					dctx.log("[supervisor(%d)] [stop heart -pid %d] [safety exit]\n", dctx.Pid, dctx.CPid)
-					os.Exit(0)
+					if data.Behavior == WantSafetyClose {
+						dctx.log("[supervisor(%d)] [stop heart -pid %d] [safety exit]\n", dctx.Pid, dctx.CPid)
+						os.Exit(0)
+					}
 				}
+			}()
+		})
+
+		// named-pipe-ipc
+		dctx.namedPipeOnce.Do(func() {
+			dctx.namedPipeCtx, err = named_pipe_ipc.NewContext(context.Background(), "./", named_pipe_ipc.S)
+			if err != nil {
+				log.Fatal(err)
 			}
-		}()
+			dctx.log("[supervisor(%d)] [named-pipe-ipc] [listen]\n", dctx.Pid)
+			go func() {
+				go func() {
+					for {
+						msg, err := dctx.namedPipeCtx.Recv(false, '\n')
+						if err != nil && err.Error() != named_pipe_ipc.NoMessageMessage {
+							dctx.log("[supervisor(%d)] [named-pipe-ipc] [err:%v]\n", dctx.Pid, err)
+							os.Exit(4)
+						}
+
+						if msg == nil {
+							if ctx.Err() != nil {
+								return
+							}
+							time.Sleep(500 * time.Millisecond)
+							continue
+						}
+
+						var epm NamedPipeMessage
+						err = json.Unmarshal(msg, &epm)
+						if err != nil {
+							dctx.log("[supervisor(%d)] [named-pipe-ipc] [err:%v]\n", dctx.Pid, err)
+						}
+
+						if epm.Api == PrintInformation {
+							ret := dctx.Information()
+							_, err = dctx.namedPipeCtx.Send(named_pipe_ipc.Message(ret + "\n"))
+							if err != nil {
+								dctx.log("[supervisor(%d)] [named-pipe-ipc] [send-error:%v]\n", dctx.Pid, err)
+							}
+						}
+					}
+				}()
+
+				err = dctx.namedPipeCtx.Listen('\n')
+				if err != nil {
+					dctx.log("[supervisor(%d)] [named-pipe-ipc start failed] [err:%v]\n", dctx.Pid, err)
+					os.Exit(3)
+				}
+			}()
+		})
 
 		// parent process wait child process exit
 		err = cmd.Wait()
@@ -272,20 +335,20 @@ func (dctx *Context) Run(ctx context.Context) error {
 
 		// start slow
 		if cost < dctx.MinExitTime {
-			errNum++
+			dctx.ErrNum++
 		} else {
-			errNum = 0
+			dctx.ErrNum = 0
 		}
 
 		if dctx.RestoreTime > 0 && cost > dctx.RestoreTime {
 			isReset = true
-			count = 1
+			dctx.Count = 1
 		}
 
 		if err != nil {
-			dctx.log("[supervisor(%d)] [%s] [heart -pid=%d exit] [%d-worked %v] [err: %v]\n", dctx.Pid, dInfo, dctx.CPid, dctx.CPid, cost, err)
+			dctx.log("[supervisor(%d)] [%s] [heart -pid=%d exit] [%d-worked %v] [err: %v]\n", dctx.Pid, dctx.Information(), dctx.CPid, dctx.CPid, cost, err)
 		} else {
-			dctx.log("[supervisor(%d)] [%s] [heart -pid=%d exit] [%d-worked %v]\n", dctx.Pid, dInfo, dctx.CPid, dctx.CPid, cost)
+			dctx.log("[supervisor(%d)] [%s] [heart -pid=%d exit] [%d-worked %v]\n", dctx.Pid, dctx.Information(), dctx.CPid, dctx.CPid, cost)
 		}
 	}
 

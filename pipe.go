@@ -39,3 +39,13 @@ type PipeMessage struct {
 	Type     PipeMessageType
 	Behavior ProcessBehavior
 }
+
+type NamedPipeMessageType int
+
+const (
+	PrintInformation NamedPipeMessageType = iota + 1
+)
+
+type NamedPipeMessage struct {
+	Api NamedPipeMessageType
+}

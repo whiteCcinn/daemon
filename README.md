@@ -67,6 +67,7 @@ func main() {
 - [daemon](https://github.com/whiteCcinn/daemon/blob/main/example/daemon.go)
 - [daemon-recover](https://github.com/whiteCcinn/daemon/blob/main/example/daemon_recover.go)
 - [daemon-signal](https://github.com/whiteCcinn/daemon/blob/main/example/daemon_signal.go)
+- [named-pipe-ipc](https://github.com/whiteCcinn/daemon/blob/main/example/named-pipe-ipc.go)
 
 ## Log
 
@@ -123,6 +124,10 @@ main.main()
 2021/05/19 07:51:05 sigterm
 [supervisor(1775)] [stop heart -pid 1782] [safety exit]
 2021/05/19 07:51:09 1782 end...
+
+
+root@87ced9181ef6:/www/example# ./named-pipe-ipc
+2021/05/20 10:22:32 count:3/2; errNum:0/0
 ```
 
 ## Terminal

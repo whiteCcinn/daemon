@@ -18,5 +18,7 @@ example/daemon
 example/daemon_recover
 example/daemon_signal
 example/*.log
+example/named-pipe-ipc.go
+example/golang.pipe*
 go.sum
 .idea
