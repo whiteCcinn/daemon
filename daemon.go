@@ -290,7 +290,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 			go func() {
 				go func() {
 					for {
-						msg, err := dctx.namedPipeCtx.Recv(false, '\n')
+						msg, err := dctx.namedPipeCtx.Recv(false)
 						if err != nil && err.Error() != named_pipe_ipc.NoMessageMessage {
 							dctx.log("[supervisor(%d)] [named-pipe-ipc] [err:%v]\n", dctx.Pid, err)
 							os.Exit(4)
@@ -320,7 +320,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 					}
 				}()
 
-				err = dctx.namedPipeCtx.Listen('\n')
+				err = dctx.namedPipeCtx.Listen()
 				if err != nil {
 					dctx.log("[supervisor(%d)] [named-pipe-ipc start failed] [err:%v]\n", dctx.Pid, err)
 					os.Exit(3)
