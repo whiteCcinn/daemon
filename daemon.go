@@ -243,9 +243,8 @@ func (dctx *Context) Run(ctx context.Context) error {
 				}
 				return
 			}
-			SetSigHandler(exitFunc, syscall.SIGINT)
-			SetSigHandler(exitFunc, syscall.SIGTERM)
-
+			SetSigHandler(exitFunc, syscall.SIGINT, syscall.SIGTERM)
+			go ServeSignals()
 			break
 		}
 
@@ -268,6 +267,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 						log.Printf("decode r, err: %v", err)
 						break
 					}
+
 					if data.Type != ProcessToSupervisor {
 						continue
 					}

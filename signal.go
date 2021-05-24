@@ -4,8 +4,12 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
+
+var signalOnce = new(sync.Once)
+var ch = make(chan os.Signal, 8)
 
 // ErrStop should be returned signal handler function
 // for termination of handling signals.
@@ -24,27 +28,36 @@ func SetSigHandler(handler SignalHandlerFunc, signals ...os.Signal) {
 
 // ServeSignals calls handlers for system signals.
 func ServeSignals() (err error) {
-	signals := make([]os.Signal, 0, len(handlers))
-	for sig := range handlers {
-		signals = append(signals, sig)
-	}
+	done := false
+	signalOnce.Do(func() {
+		signals := make([]os.Signal, 0, len(handlers))
+		for sig := range handlers {
+			signals = append(signals, sig)
+		}
 
-	ch := make(chan os.Signal, 8)
-	signal.Notify(ch, signals...)
+		signal.Notify(ch, signals...)
 
-	for sig := range ch {
-		for _, f := range handlers[sig] {
-			err = f(sig)
-			if err == ErrStop {
-				err = nil
-			}
-			if err != nil {
-				break
+		for sig := range ch {
+			for _, f := range handlers[sig] {
+				err = f(sig)
+				if err == ErrStop {
+					err = nil
+				}
+				if err != nil {
+					break
+				}
 			}
 		}
-	}
 
-	signal.Stop(ch)
+		signal.Stop(ch)
+		done = true
+	})
+
+	if done == false {
+		signal.Stop(ch)
+		signalOnce = new(sync.Once)
+		return ServeSignals()
+	}
 
 	return
 }
