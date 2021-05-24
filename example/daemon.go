@@ -18,6 +18,7 @@ func main() {
 
 	ctx := context.Background()
 	dctx := daemon.Context{
+		//Chroot:   "./pipe",
 		ProcAttr: syscall.SysProcAttr{},
 		//Logger:   os.Stdout,
 		Logger:   stdout,

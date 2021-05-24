@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+const (
+	defaultChroot = "./"
+)
+
 var defaultOption = &options{
 	exit: true,
 }
@@ -45,9 +49,7 @@ const EnvName = "_DAEMON"
 var runIdx int = 0
 
 type Context struct {
-	//PidFileName string
-	//PidFilePerm os.FileMode
-
+	Chroot   string
 	ProcAttr syscall.SysProcAttr
 
 	Logger      io.Writer
@@ -106,6 +108,9 @@ func attachContext(dctx *Context) (isChild bool) {
 	env = append(env, fmt.Sprintf("%s=%d", EnvName, runIdx))
 	dctx.Env = env
 	dctx.Args = os.Args
+	if len(dctx.Chroot) == 0 {
+		dctx.Chroot = defaultChroot
+	}
 
 	return false
 }
@@ -190,10 +195,12 @@ func (dctx *Context) Run(ctx context.Context) error {
 		//daemon information
 		if dctx.ErrNum > dctx.MaxError {
 			dctx.log("[supervisor(%d)] [child process fails too many times]\n", dctx.Pid)
+			dctx.clean()
 			os.Exit(1)
 		}
 		if dctx.MaxCount > 0 && dctx.Count > dctx.MaxCount {
 			dctx.log("[supervisor(%d)] [reboot too many times quit]\n", dctx.Pid)
+			dctx.clean()
 			os.Exit(0)
 		}
 		dctx.Count++
@@ -282,24 +289,27 @@ func (dctx *Context) Run(ctx context.Context) error {
 
 		// named-pipe-ipc
 		dctx.namedPipeOnce.Do(func() {
-			dctx.namedPipeCtx, err = named_pipe_ipc.NewContext(context.Background(), "./", named_pipe_ipc.S)
+			dctx.namedPipeCtx, err = named_pipe_ipc.NewContext(context.Background(), dctx.Chroot, named_pipe_ipc.S)
 			if err != nil {
 				log.Fatal(err)
 			}
 			dctx.log("[supervisor(%d)] [named-pipe-ipc] [listen]\n", dctx.Pid)
+			SetSigHandler(func(sig os.Signal) (err error) {
+				dctx.clean()
+				return
+			}, syscall.SIGINT, syscall.SIGTERM)
+			go ServeSignals()
+
 			go func() {
 				go func() {
 					for {
 						msg, err := dctx.namedPipeCtx.Recv(false)
-						if err != nil && err.Error() != named_pipe_ipc.NoMessageMessage {
+						if err != nil && (err.Error() != named_pipe_ipc.NoMessageMessage && err.Error() != named_pipe_ipc.PipeClosedMessage) {
 							dctx.log("[supervisor(%d)] [named-pipe-ipc] [err:%v]\n", dctx.Pid, err)
 							os.Exit(4)
 						}
 
 						if msg == nil {
-							if ctx.Err() != nil {
-								return
-							}
 							time.Sleep(500 * time.Millisecond)
 							continue
 						}
@@ -312,7 +322,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 
 						if epm.Api == PrintInformation {
 							ret := dctx.Information()
-							_, err = dctx.namedPipeCtx.Send(named_pipe_ipc.Message(ret + "\n"))
+							_, err = dctx.namedPipeCtx.Send(named_pipe_ipc.Message(ret))
 							if err != nil {
 								dctx.log("[supervisor(%d)] [named-pipe-ipc] [send-error:%v]\n", dctx.Pid, err)
 							}
@@ -353,6 +363,14 @@ func (dctx *Context) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (dctx *Context) clean() {
+	if dctx.namedPipeCtx != nil {
+		if err := dctx.namedPipeCtx.Close(); err != nil {
+			dctx.log("[supervisor(%d)] [named-pipe-ipc] [close failed] [%v]\n", dctx.Pid, err)
+		}
+	}
 }
 
 // output log-message to Context.Logger
