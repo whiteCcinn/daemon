@@ -5,8 +5,8 @@ import (
 	"github.com/whiteCcinn/daemon"
 	"log"
 	"os"
+	"sync"
 	"syscall"
-	"time"
 )
 
 func main() {
@@ -34,24 +34,29 @@ func main() {
 
 	// belong func main()
 	dctx.WithRecovery(func() {
-		daemon.SetSigHandler(func(sig os.Signal) (err error) {
-			log.Println("sigint")
-			return
-		}, syscall.SIGINT)
-
-		daemon.SetSigHandler(func(sig os.Signal) (err error) {
-			log.Println("sigterm")
-			return nil
-		}, syscall.SIGTERM)
-
+		wg := new(sync.WaitGroup)
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+			daemon.SetSigHandler(func(sig os.Signal) (err error) {
+				log.Println("sigint")
+				return daemon.ErrStop
+			}, syscall.SIGINT)
+
+			daemon.SetSigHandler(func(sig os.Signal) (err error) {
+				log.Println("sigterm")
+				return daemon.ErrStop
+			}, syscall.SIGTERM)
+
 			err := daemon.ServeSignals()
 			if err != nil {
 				log.Println(err)
 			}
 		}()
+
 		log.Println(os.Getpid(), "start...")
-		time.Sleep(time.Second * 10)
+		//time.Sleep(time.Second * 10)
 		log.Println(os.Getpid(), "end...")
+		wg.Wait()
 	}, nil)
 }

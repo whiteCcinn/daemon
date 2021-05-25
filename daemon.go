@@ -10,7 +10,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -237,21 +239,27 @@ func (dctx *Context) Run(ctx context.Context) error {
 
 		// child process
 		if cmd == nil {
-			exitFunc := func(sig os.Signal) (err error) {
-				// this is fd(3)
-				pipe := os.NewFile(uintptr(3), "pipe")
-				message := PipeMessage{
-					Type:     ProcessToSupervisor,
-					Behavior: WantSafetyClose,
+			go func() {
+				ch := make(chan os.Signal, 2)
+				exitFunc := func(sig os.Signal) {
+					// this is fd(3)
+					pipe := os.NewFile(uintptr(3), "pipe")
+					message := PipeMessage{
+						Type:     ProcessToSupervisor,
+						Behavior: WantSafetyClose,
+					}
+					err = json.NewEncoder(pipe).Encode(message)
+					if err != nil && !strings.Contains(err.Error(), "broken pipe") {
+						panic(err)
+					}
+					return
 				}
-				err = json.NewEncoder(pipe).Encode(message)
-				if err != nil {
-					panic(err)
+				signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+
+				for sig := range ch {
+					exitFunc(sig)
 				}
-				return
-			}
-			SetSigHandler(exitFunc, syscall.SIGINT, syscall.SIGTERM)
-			go ServeSignals()
+			}()
 			break
 		}
 
@@ -296,6 +304,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 			dctx.log("[supervisor(%d)] [named-pipe-ipc] [listen]\n", dctx.Pid)
 			SetSigHandler(func(sig os.Signal) (err error) {
 				dctx.clean()
+				os.Exit(0)
 				return
 			}, syscall.SIGINT, syscall.SIGTERM)
 			go ServeSignals()
