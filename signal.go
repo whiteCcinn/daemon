@@ -36,12 +36,12 @@ func ServeSignals() (err error) {
 		}
 
 		signal.Notify(ch, signals...)
-
+	loop:
 		for sig := range ch {
 			for _, f := range handlers[sig] {
 				err = f(sig)
 				if err == ErrStop {
-					err = nil
+					break loop
 				}
 				if err != nil {
 					break
