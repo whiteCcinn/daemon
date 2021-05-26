@@ -19,6 +19,8 @@ func main() {
 	ctx := context.Background()
 	dctx := daemon.Context{
 		//Chroot:   "./pipe",
+		//PidFile: "./daemon.pid",
+		//CPidFile: "./main.pid",
 		ProcAttr: syscall.SysProcAttr{},
 		//Logger:   os.Stdout,
 		Logger:   stdout,

@@ -7,6 +7,7 @@ import (
 	"github.com/erikdubbelboer/gspt"
 	"github.com/whiteCcinn/named-pipe-ipc"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -71,6 +72,11 @@ type Context struct {
 
 	*exec.Cmd
 	ExtraFiles []*os.File
+
+	// supervisor pid file
+	PidFile string
+	// main pid file
+	CPidFile string
 	// supervisor pid
 	Pid int
 	// main pid
@@ -193,16 +199,21 @@ func (dctx *Context) Run(ctx context.Context) error {
 	dctx.Count = 1
 	isReset := false
 	dctx.ErrNum = 0
+	err = dctx.syncPidIntoFile()
+	if err != nil {
+		dctx.log("[supervisor(%d)] [syncPidIntoFile] [%v]\n", dctx.Pid, err)
+		os.Exit(1)
+	}
 	for {
 		//daemon information
 		if dctx.ErrNum > dctx.MaxError {
 			dctx.log("[supervisor(%d)] [child process fails too many times]\n", dctx.Pid)
-			dctx.clean()
+			dctx.cleanAll()
 			os.Exit(1)
 		}
 		if dctx.MaxCount > 0 && dctx.Count > dctx.MaxCount {
 			dctx.log("[supervisor(%d)] [reboot too many times quit]\n", dctx.Pid)
-			dctx.clean()
+			dctx.cleanAll()
 			os.Exit(0)
 		}
 		dctx.Count++
@@ -263,6 +274,12 @@ func (dctx *Context) Run(ctx context.Context) error {
 			break
 		}
 
+		err = dctx.syncCPidIntoFile()
+		if err != nil {
+			dctx.log("[supervisor(%d)] [syncCPidIntoFile] [%v]\n", dctx.Pid, err)
+			os.Exit(1)
+		}
+
 		// supervisor process
 		gspt.SetProcTitle(fmt.Sprintf("heart -pid %d", dctx.CPid))
 		if dctx.Count > 2 || isReset {
@@ -288,6 +305,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 					}
 
 					if data.Behavior == WantSafetyClose {
+						dctx.cleanCPidEtc()
 						dctx.log("[supervisor(%d)] [stop heart -pid %d] [safety exit]\n", dctx.Pid, dctx.CPid)
 						os.Exit(0)
 					}
@@ -303,7 +321,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 			}
 			dctx.log("[supervisor(%d)] [named-pipe-ipc] [listen]\n", dctx.Pid)
 			SetSigHandler(func(sig os.Signal) (err error) {
-				dctx.clean()
+				dctx.cleanNamedPipeEtc().cleanPidEtc()
 				os.Exit(0)
 				return
 			}, syscall.SIGINT, syscall.SIGTERM)
@@ -374,12 +392,42 @@ func (dctx *Context) Run(ctx context.Context) error {
 	return nil
 }
 
-func (dctx *Context) clean() {
+func (dctx *Context) cleanNamedPipeEtc() *Context {
 	if dctx.namedPipeCtx != nil {
 		if err := dctx.namedPipeCtx.Close(); err != nil {
-			dctx.log("[supervisor(%d)] [named-pipe-ipc] [close failed] [%v]\n", dctx.Pid, err)
+			dctx.log("[supervisor(%d)] [clean named-pipe-ipc] [close failed] [%v]\n", dctx.Pid, err)
 		}
 	}
+
+	return dctx
+}
+
+func (dctx *Context) cleanPidEtc() *Context {
+	if len(dctx.PidFile) > 0 {
+		if err := os.Remove(dctx.PidFile); err != nil {
+			dctx.log("[supervisor(%d)] [clean pic-file] [move failed] [%v]\n", dctx.Pid, err)
+		}
+	}
+
+	return dctx
+}
+
+func (dctx *Context) cleanCPidEtc() *Context {
+	if len(dctx.CPidFile) > 0 {
+		if err := os.Remove(dctx.CPidFile); err != nil {
+			dctx.log("[supervisor(%d)] [clean cpic-file] [move failed] [%v]\n", dctx.Pid, err)
+		}
+	}
+
+	return dctx
+}
+
+func (dctx *Context) cleanPidFiles() {
+	dctx.cleanPidEtc().cleanCPidEtc()
+}
+
+func (dctx *Context) cleanAll() {
+	dctx.cleanNamedPipeEtc().cleanPidEtc().cleanCPidEtc()
 }
 
 // output log-message to Context.Logger
@@ -413,4 +461,77 @@ func (dctx *Context) WithRecovery(exec func(), recoverFn func(r interface{})) {
 		}
 	}()
 	exec()
+}
+
+// syncPidIntoFile is sync pid into file
+func (dctx *Context) syncPidIntoFile() (err error) {
+	if len(dctx.PidFile) > 0 {
+		file, err := os.OpenFile(dctx.PidFile, os.O_WRONLY|os.O_CREATE, 0644)
+		defer func() {
+			err = file.Close()
+			if err != nil {
+				dctx.log("[supervisor(%d)] [sync pid into file] [close failed] [%v]\n", dctx.Pid, err)
+			}
+		}()
+		if err != nil {
+			return err
+		}
+		pid := strconv.Itoa(dctx.Pid)
+		_, err = file.WriteString(pid)
+		if err != nil {
+			return err
+		}
+	}
+
+	return
+}
+
+// syncCPidIntoFile is sync cpid into file
+func (dctx *Context) syncCPidIntoFile() (err error) {
+	if len(dctx.CPidFile) > 0 {
+		file, err := os.OpenFile(dctx.CPidFile, os.O_WRONLY|os.O_CREATE, 0644)
+		defer func() {
+			err = file.Close()
+			if err != nil {
+				dctx.log("[supervisor(%d)] [sync cpid into file] [close failed] [%v]\n", dctx.Pid, err)
+			}
+		}()
+		if err != nil {
+			return err
+		}
+		pid := strconv.Itoa(dctx.CPid)
+		_, err = file.WriteString(pid)
+		if err != nil {
+			return err
+		}
+	}
+
+	return
+}
+
+// ExistByPidFile exists by pid file read pid
+func ExistByPidFile(pidFile string) (err error, exist bool) {
+	file, err := os.OpenFile(pidFile, os.O_RDONLY, 0644)
+	defer file.Close()
+	if err != nil {
+		return err, false
+	}
+	pidStr, err := ioutil.ReadAll(file)
+	if err != nil {
+		return err, false
+	}
+	pid, err := strconv.Atoi(string(pidStr))
+	if err != nil {
+		return err, false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err, false
+	}
+	err = p.Signal(syscall.Signal(0))
+	if err != nil {
+		return err, false
+	} else {
+		return nil, true
+	}
 }
