@@ -154,14 +154,20 @@ func Background(ctx context.Context, dctx *Context, opts ...Option) (*exec.Cmd, 
 	return cmd, nil
 }
 
-// startProc start am process
+// startProc start an process
 func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 	// console show process information just use Args[0]
 	// so we should wrapper the args for show process full command
 	execs := strings.Split(dctx.Args[0], " ")
+	var args = dctx.Args
+	if len(execs) > 1 && len(dctx.Args[1]) > 1 {
+		if execs[1] == args[1] {
+			args = append([]string{execs[0]}, dctx.Args[1:]...)
+		}
+	}
 	cmd := &exec.Cmd{
-		Path:        execs[0],
-		Args:        []string{strings.Join(dctx.Args, " ")},
+		Path: execs[0],
+		Args: append([]string{strings.Join(args, " ")}, dctx.Args[1:]...),
 		Env:         dctx.Env,
 		SysProcAttr: &dctx.ProcAttr,
 	}
