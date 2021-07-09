@@ -19,8 +19,6 @@ func main() {
 	ctx := context.Background()
 	dctx := daemon.Context{
 		//Chroot:   "./pipe",
-		//PidFile: "./daemon.pid",
-		//CPidFile: "./main.pid",
 		ProcAttr: syscall.SysProcAttr{},
 		//Logger:   os.Stdout,
 		Logger:   stdout,
@@ -30,9 +28,13 @@ func main() {
 		},
 	}
 
-	err = dctx.Run(ctx)
+	parent, err := dctx.Run(ctx)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if parent {
+		return
 	}
 
 	// belong func main()

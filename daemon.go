@@ -125,20 +125,20 @@ func attachContext(dctx *Context) (isChild bool) {
 
 // Background Converts the current process to a background process
 // If `WithNoExit()` is called, it doesn't exit
-func Background(ctx context.Context, dctx *Context, opts ...Option) (*exec.Cmd, error) {
+func Background(ctx context.Context, dctx *Context, opts ...Option) (isParent bool, cmd *exec.Cmd, err error) {
 	for _, o := range opts {
 		o.apply(defaultOption)
 	}
 
 	if attachContext(dctx) {
-		return nil, nil
+		return
 	}
 
 	// starting child process
-	cmd, err := startProc(ctx, dctx)
+	cmd, err = startProc(ctx, dctx)
 	if err != nil {
 		dctx.log("[start exec process failed, err: %s]\n", dctx.Pid, err)
-		return nil, err
+		return
 	} else {
 		dctx.CPid = cmd.Process.Pid
 		if !defaultOption.exit {
@@ -148,13 +148,13 @@ func Background(ctx context.Context, dctx *Context, opts ...Option) (*exec.Cmd, 
 	}
 
 	if defaultOption.exit {
-		os.Exit(0)
+		isParent = true
 	}
 
-	return cmd, nil
+	return
 }
 
-// startProc start an process
+// startProc start am process
 func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 	// console show process information just use Args[0]
 	// so we should wrapper the args for show process full command
@@ -166,8 +166,8 @@ func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 		}
 	}
 	cmd := &exec.Cmd{
-		Path: execs[0],
-		Args: append([]string{strings.Join(args, " ")}, dctx.Args[1:]...),
+		Path:        execs[0],
+		Args:        append([]string{strings.Join(args, " ")}, dctx.Args[1:]...),
 		Env:         dctx.Env,
 		SysProcAttr: &dctx.ProcAttr,
 	}
@@ -200,10 +200,20 @@ func startProc(ctx context.Context, dctx *Context) (*exec.Cmd, error) {
 }
 
 // Run An supervisor daemon
-func (dctx *Context) Run(ctx context.Context) error {
-	_, err := Background(ctx, dctx)
+func (dctx *Context) Run(ctx context.Context) (isParent bool, err error) {
+	if running, pid := dctx.ProcessRunning(); running {
+		err = processAlreadyExists{Pid: pid}
+
+		return
+	}
+
+	isParent, _, err = Background(ctx, dctx)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if isParent {
+		return
 	}
 
 	dctx.Count = 1
@@ -251,7 +261,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 		dctx.ExtraFiles = extraFile
 
 		begin := time.Now()
-		cmd, err := Background(ctx, dctx, WithNoExit())
+		_, cmd, err := Background(ctx, dctx, WithNoExit())
 		if err != nil {
 			dctx.log("[supervisor(%d)] [child process start failed, err: %s]\n", dctx.Pid, err)
 			dctx.ErrNum++
@@ -399,7 +409,7 @@ func (dctx *Context) Run(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return
 }
 
 func (dctx *Context) cleanNamedPipeEtc() *Context {
@@ -442,6 +452,7 @@ func (dctx *Context) cleanAll() {
 
 // output log-message to Context.Logger
 func (dctx *Context) log(format string, args ...interface{}) {
+	format = fmt.Sprintf("[%s] %s", time.Now().String(), format)
 	_, fe := fmt.Fprintf(dctx.Logger, format, args...)
 	if fe != nil {
 		log.Fatal(fe)
@@ -450,6 +461,7 @@ func (dctx *Context) log(format string, args ...interface{}) {
 
 // output log-message to Context.PanicLogger
 func (dctx *Context) logPanic(format string, args ...interface{}) {
+	format = fmt.Sprintf("[%s] %s", time.Now().String(), format)
 	_, fe := fmt.Fprintf(dctx.PanicLogger, format, args...)
 	if fe != nil {
 		log.Fatal(fe)
@@ -519,29 +531,62 @@ func (dctx *Context) syncCPidIntoFile() (err error) {
 	return
 }
 
+func (dctx *Context) ProcessRunning() (running bool, pid int) {
+	if id, _ := strconv.Atoi(os.Getenv(EnvName)); id > 0 {
+		return
+	}
+
+	_, running, pid = ExistByPidFile(dctx.CPidFile)
+
+	return
+}
+
 // ExistByPidFile exists by pid file read pid
-func ExistByPidFile(pidFile string) (err error, exist bool) {
-	file, err := os.OpenFile(pidFile, os.O_RDONLY, 0644)
+func ExistByPidFile(pidFile string) (err error, exist bool, pid int) {
+	var file *os.File
+
+	file, err = os.OpenFile(pidFile, os.O_RDONLY, 0644)
 	defer file.Close()
 	if err != nil {
-		return err, false
+		return
 	}
-	pidStr, err := ioutil.ReadAll(file)
+
+	var pidStr []byte
+	pidStr, err = ioutil.ReadAll(file)
 	if err != nil {
-		return err, false
+		return
 	}
-	pid, err := strconv.Atoi(string(pidStr))
+
+	pid, err = strconv.Atoi(string(pidStr))
 	if err != nil {
-		return err, false
+		return
 	}
-	p, err := os.FindProcess(pid)
+
+	var p *os.Process
+	p, err = os.FindProcess(pid)
 	if err != nil {
-		return err, false
+		return
 	}
+
 	err = p.Signal(syscall.Signal(0))
 	if err != nil {
-		return err, false
+		return
 	} else {
-		return nil, true
+		exist = true
+
+		return
 	}
 }
+
+type processAlreadyExists struct {
+	Pid int
+}
+
+func (p processAlreadyExists) Error() string {
+	return fmt.Sprintf("a running process already exists on pid=%d", p.Pid)
+}
+
+func (p processAlreadyExists) String() string {
+	return p.Error()
+}
+

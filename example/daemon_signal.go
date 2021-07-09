@@ -27,9 +27,13 @@ func main() {
 		},
 	}
 
-	err = dctx.Run(ctx)
+	parent, err := dctx.Run(ctx)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if parent {
+		return
 	}
 
 	// belong func main()
